@@ -1,0 +1,261 @@
+---
+title: "Characterizing Automobiles"
+author: "JACE HIGA"
+date: "03/17/2025"
+
+format: 
+  html:  # You will quite likely want to change all but the last one, to taste
+    theme:
+        light: flatly
+        dark: darkly
+    mainfont: monospace
+    highlight-style: github
+    title-block-banner: true
+    embed-resources: true
+---
+
+# Setup
+
+-   Setup
+
+```{r libs}
+sh <- suppressPackageStartupMessages
+sh(library(tidyverse))
+sh(library(caret))
+sh(library(fastDummies))
+sh(library(class))
+sh(library(ISLR)) # for the "Auto" dataframe
+```
+
+# Dataframe
+
+-   We use the `Auto` dataframe.
+
+```{r df}
+head(Auto)
+```
+
+-   It has the following variable names, which describe various attributes of automobiles.
+
+```{r df2}
+names(Auto)
+```
+
+# Multiple Regression
+
+-   Run a linear regression model with `mpg` as the dependent variable and `horsepower` and `year` as features (variables).
+-   Compute and comment on the RMSE.
+
+```{r regression}
+mod1 = lm(Auto$mpg ~ Auto$horsepower + Auto$year)
+mod2 = lm(Auto$mpg ~ Auto$horsepower * Auto$year)
+
+get_rmse <- function(model, data) {
+  data <- na.omit(data)  # Ensure no missing values
+  data <- data[1:nrow(model$model), ]  # Match the training data size
+  pred <- predict(model, newdata = data)
+  sqrt(mean((data$mpg - pred)^2))
+}
+
+unlist(lapply(list(mod1, mod2), get_rmse, data = Auto))
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: *RMSE's of 4.371506 and 3.880584 indicate that the model performs relatively well. A slightly lower RMSE for mod2, with our interaction term would seem to indicate that it predicts the mpg better with horsepower and year together. Overall it seems like horsepower and year are pretty good predictors of mpg.*
+
+# Feature Engineering
+
+-   Create 10 features based on the `name` column.
+-   Remove all rows with a missing value.
+-   Ensure only `mpg` and the engineered features remain.
+-   Compute and comment on the RMSE.
+
+```{r features}
+Auto2 <- Auto %>%
+  mutate(chevrolet = str_detect(name, "chevrolet") * acceleration,
+         ford = str_detect(name, "ford") * acceleration,
+         toyota = str_detect(name, "toyota") * acceleration,
+         volkswagen = str_detect(name, "volkswagen") * acceleration,
+         dodge = str_detect(name, "dodge") * acceleration,
+         chevrolet2 = str_detect(name, "chevrolet") * cylinders,
+         ford2 = str_detect(name, "ford") * cylinders,
+         toyota2 = str_detect(name, "toyota") * cylinders,
+         volkswagen2 = str_detect(name, "volkswagen") * cylinders,
+         dodge2 = str_detect(name, "dodge") * cylinders
+  ) 
+
+
+Auto3 <- Auto2 %>%
+  dplyr::select(-cylinders, -displacement, -horsepower, -weight, -acceleration, -year, -origin, -name) %>%
+  na.omit()
+
+sqrt(mean((Auto2$mpg - predict(lm(formula = mpg ~ ., data = Auto2), newdata = Auto2))^2))
+
+sqrt(mean((Auto3$mpg - predict(lm(formula = mpg ~ ., data = Auto3), newdata = Auto3))^2))
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: *I got an RMSE of 0.9878426 when we add my features to the dataset which was quite a bit better than our original RMSE, indicating a more accurate model. However, when we take out all of the original features we get 6.816989, a model worst than what we had gotten previously. It would seem that the features of the original dataset and the features I created are much more effective in conjunction with one another.*
+
+# Classification
+
+-   Use either of $K$-NN or Naive Bayes to predict whether an automobile is a `chevrolet` or a `honda`.
+-   Explain your choice of technique.
+-   Report on your Kappa value.
+
+```{r classification}
+control = trainControl(method = "cv", number = 5)
+
+set.seed(2)
+
+Auto4 <- Auto %>%
+  mutate(chevrolet = str_detect(name, "chevrolet"),
+         honda = str_detect(name, "honda"),
+         make = case_when(chevrolet ~ "chevrolet",
+                           honda ~ "honda",
+                           TRUE ~ "other"))
+         
+Auto5 <- Auto4 %>% 
+           dplyr::select(make, year, origin, horsepower)
+
+split <- createDataPartition(Auto5$make, p = 0.8, list = FALSE)
+train_knn <- Auto5[split, ]
+test_knn <- Auto5[-split, ]
+
+fit_knn = train(make ~ .,
+                data = train_knn, 
+                method = "knn",
+                tuneLength = 15,
+                metric = "Kappa",
+                trControl = control)
+
+confusionMatrix(predict(fit_knn, test_knn),factor(test_knn$make))
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: *I got a kappa value of 0.3493 which is not the best. I expected year (Chevy is older than Honda and many other car brands), origin (I think Honda is mostly made in Japan and many cars are from Europe) along with horsepower (to differentiate high-end car brands) to be good predictors but it was a little tough because we did not have all that many observations of data. Our test data was 77 observations. I think knn would be more effective than naive bayes because the cars that are not chevrolet and honda have lots of variation, it can range from toyota to ford to bmw and so on.*
+
+# Binary Classification
+
+-   Predict whether a car is a `honda`.
+-   Use model weights.
+-   Display and comment on an ROC curve.
+
+```{r binary classification}
+control = trainControl(method = "cv", number = 5) 
+
+Auto6 <- Auto %>%
+  mutate(honda = as.factor(str_detect(name, "honda")))  
+
+counts <- table(Auto6$honda)
+count_y <- counts[["TRUE"]] 
+count_n <- counts[["FALSE"]]  
+weigh_y <- max(count_y, count_n) / count_y
+weigh_n <- max(count_y, count_n) / count_n
+
+c(count_y,count_n,weigh_y,weigh_n)
+```
+
+```{r}
+Auto6 <- Auto6 %>% 
+               mutate(weight=ifelse(honda== TRUE, weigh_y, weigh_n))
+
+fit_weights = train(honda ~ .,
+                    data = train_knn, 
+                    method = "naive_bayes",
+                    tuneLength = 15,
+                    metric = "Kappa",
+                    trControl = control,
+                    weights = train_knn$weight)
+
+confusionMatrix(predict(fit_weights, test_knn),factor(test_knn$honda))
+```
+
+```{r}
+library(pROC)
+
+test_knn$honda <- factor(test_knn$honda, levels = c("FALSE", "TRUE"))
+
+prob <- predict(fit_weights, newdata = test_knn, type = "prob")[, "TRUE"]
+
+# Compute ROC curve
+
+myRoc <- roc(test_knn$honda, prob, levels = c("FALSE", "TRUE"))
+
+# Plot ROC curve
+plot(myRoc)
+
+auc(myRoc)
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: *Adding weights reduced our kappa value and was ineffective in this case. Many car brands make cars that have a variety of features ie horsepower, acceleration, cylinders, etc. For example, dodge has trucks that are heavy and slower but also has cars like the challenger that are faster and a lighter. Many companies act in this way and so many cars can be similar to each other. For example Lexus is like the luxury Toyota as well and it can be hard to differentiate the cars. My ROC model has an AUC of 0.8867 which would indicate it performs better than random guessing, but the jumps make it seem like my data is pretty granular which I described earlier.*
+
+# Ethics
+
+-   Based on your analysis, comment on the [Clean Air Act of 1970 and Ammendments of 1977](https://www.epa.gov/clean-air-act-overview/evolution-clean-air-act)
+-   Discuss the civic reposibilities of data scientists for:
+    -   Big Data and Human-Centered Computing
+    -   Democratic Institutions
+    -   Climate Change
+-   Provide at least one statistical measure for each, such as a RMSE, Kappa value, or ROC curve.
+
+> [TODO]{style="color:red;font-weight:bold"}: Big Data and Human-Centered Computing
+
+```{r big data}
+Auto %>%
+  filter(year < 77) %>%
+  summarise(mean(mpg))
+
+Auto %>%
+  filter(year > 77) %>%
+  summarise(mean(mpg))
+```
+
+## Before 1977, the mean mpg was 19.74065, but after they had the Ammendments of 1977 the mean mpg increased to 28.74533, more than 9mpg. After the ammendment it was evident that something and needed to change for car manufacturers and it is clear and evident that they did do something about it to combat rising emmisions.
+
+> [TODO]{style="color:red;font-weight:bold"}: Democratic Institutions
+
+```{r democracy}
+library(ggplot2)
+
+ggplot(Auto, aes(x = year, y = horsepower)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", color = "plum") +
+  labs(title = "Fuel Efficiency Trends Over Time",
+       x = "Year",
+       y = "Horsepower") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+  
+Auto %>%
+  filter(year < 77) %>%
+  summarise(mean(horsepower))
+
+Auto %>%
+  filter(year > 77) %>%
+  summarise(mean(horsepower))
+```
+
+## It seems that one way they increased mpg was by reducing horsepower. As you can see it went down over the years, especially after 1977. The mean horsepower before 1977 is 115.3318 while after 1977 it is 88.86. After 1980 the graph seems to shw that the majority of horsepower is under 125 and the numbers are clustering more closely together.
+
+> [TODO]{style="color:red;font-weight:bold"}: Climate Change
+
+```{r climate}
+Auto %>%
+  mutate(time_period = ifelse(year < 77, "Before 1977", "After 1977")) %>%
+  group_by(time_period) %>%
+  summarise(mean_weight = mean(weight, na.rm = TRUE),
+            mean_mpg = mean(mpg, na.rm = TRUE))
+
+library(ggplot2)
+
+Auto %>%
+  mutate(period = ifelse(year < 77, "Before 1977", "After 1977")) %>%
+  ggplot(aes(x = mpg, y = weight, color = period)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm") +
+  labs(title = "Weight vs. MPG Before and After 1977",
+       x = "Miles Per Gallon (mpg)",
+       y = "Weight (lbs)") +
+  theme_bw() 
+
+```
+
+## As we can see in the graph, as weight goes up mpg goes down. When we look at the period we see that there is a steeper line before 1977 which would indicate that weight has a stronger effect on mpg. After the slope is not as steep which would indicate that in addition to cutting weight on cars they also found other factors that increased mpg. This shows that they looked at many more possible factors after the revisions in 1977.
